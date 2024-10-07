@@ -4,12 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="7a07a28f-e22d-4dff-80ef-bc2ba3c82ef6" name="Changes" comment="Version 0.0.1 extract tables from pdf">
-      <change afterPath="$PROJECT_DIR$/utils.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/pdf_extractor_app.py" beforeDir="false" afterPath="$PROJECT_DIR$/pdf_extractor_app.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/pdf_table_extractor_improved.py" beforeDir="false" afterPath="$PROJECT_DIR$/pdf_table_extractor_improved.py" afterDir="false" />
-    </list>
+    <list default="true" id="7a07a28f-e22d-4dff-80ef-bc2ba3c82ef6" name="Changes" comment="Version 1.0.0 extract tables from pdf - Full + persist + extract FR :)" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -63,11 +58,20 @@
       <option name="project" value="LOCAL" />
       <updated>1727856945621</updated>
     </task>
-    <option name="localTasksCounter" value="2" />
+    <task id="LOCAL-00002" summary="Version 1.0.0 extract tables from pdf - Full + persist + extract FR :)">
+      <option name="closed" value="true" />
+      <created>1728278001790</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1728278001790</updated>
+    </task>
+    <option name="localTasksCounter" value="3" />
     <servers />
   </component>
   <component name="VcsManagerConfiguration">
     <MESSAGE value="Version 0.0.1 extract tables from pdf" />
-    <option name="LAST_COMMIT_MESSAGE" value="Version 0.0.1 extract tables from pdf" />
+    <MESSAGE value="Version 1.0.0 extract tables from pdf - Full + persist + extract FR :)" />
+    <option name="LAST_COMMIT_MESSAGE" value="Version 1.0.0 extract tables from pdf - Full + persist + extract FR :)" />
   </component>
 </project>

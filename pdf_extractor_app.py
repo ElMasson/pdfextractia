@@ -130,7 +130,13 @@ def display_table(table, page_num, table_idx, metadata=None, extraction_time=Non
         st.json(table)
 
     # Préparer le DataFrame
-    df = clean_and_prepare_table(table, metadata) if isinstance(table, dict) else table
+    if isinstance(table, dict):
+        df = clean_and_prepare_table(table, metadata)
+    elif isinstance(table, pd.DataFrame):
+        df = table
+    else:
+        st.warning("Format de données non reconnu pour ce tableau.")
+        return
 
     if df.empty:
         st.warning("Le tableau extrait est vide ou n'a pas pu être correctement formaté.")
@@ -138,13 +144,23 @@ def display_table(table, page_num, table_idx, metadata=None, extraction_time=Non
 
     st.write("Données du tableau:")
 
-    # Afficher l'éditeur de données
-    edited_df = st.data_editor(
-        df,
-        num_rows="dynamic",
-        use_container_width=True,
-        key=editor_key
-    )
+    # Créer une configuration de colonne simplifiée
+    column_config = {col: st.column_config.Column(label=col) for col in df.columns}
+
+    # Afficher l'éditeur de données avec une configuration simplifiée
+    try:
+        edited_df = st.data_editor(
+            df,
+            num_rows="dynamic",
+            use_container_width=True,
+            column_config=column_config,
+            key=editor_key
+        )
+    except Exception as e:
+        st.error(f"Erreur lors de l'affichage de l'éditeur de données: {str(e)}")
+        st.write("Affichage du DataFrame en lecture seule:")
+        st.dataframe(df)
+        edited_df = df  # Utiliser le DataFrame original si l'édition échoue
 
     # Mettre à jour le DataFrame dans le session state si des modifications ont été apportées
     if not df.equals(edited_df):
@@ -159,7 +175,6 @@ def display_table(table, page_num, table_idx, metadata=None, extraction_time=Non
         mime="text/csv",
         key=download_key
     )
-
 
 def display_page_and_results(page_num, pdf_document):
     st.markdown(f"### Page {page_num}")
@@ -181,28 +196,29 @@ def display_page_and_results(page_num, pdf_document):
         if st.button(f"Extraire les tableaux de la page {page_num}", key=f"extract_{page_num}"):
             with st.spinner(f'Extraction des tableaux de la page {page_num} en cours...'):
                 extracted_data = extract_data_from_single_page(pdf_document, page_num, output_folder, model)
-                if extracted_data and extracted_data["tables"]:
+                if extracted_data and extracted_data.get("tables"):
                     extraction_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     st.success(f'Extraction de la page {page_num} terminée !')
                     for idx, table in enumerate(extracted_data["tables"]):
                         update_session_state(f"page_{page_num}_table_{idx}", table, table, extracted_data["metadata"],
                                              extraction_time)
-                elif extracted_data:
+                else:
                     st.warning(f"Aucun tableau trouvé sur la page {page_num}")
 
         # Afficher les tableaux extraits pour cette page
         page_key = f"page_{page_num}"
         if page_key in st.session_state.extracted_tables:
             for table_idx, table_data in st.session_state.extracted_tables[page_key].items():
-                display_table(
-                    table_data['df'],
-                    page_num,
-                    table_idx,
-                    table_data['metadata'],
-                    table_data['extraction_time']
-                )
-
-
+                if isinstance(table_data, dict) and 'df' in table_data:
+                    display_table(
+                        table_data['df'],
+                        page_num,
+                        table_idx,
+                        table_data.get('metadata'),
+                        table_data.get('extraction_time')
+                    )
+                else:
+                    st.warning(f"Données non valides pour le tableau {table_idx + 1} de la page {page_num}")
 # Upload du fichier PDF
 uploaded_file = st.file_uploader("Choisissez un fichier PDF", type="pdf")
 
