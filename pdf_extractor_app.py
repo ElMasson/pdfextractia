@@ -100,6 +100,9 @@ def update_session_state(data_key, df, data_structure, metadata, extraction_time
 
     storage_type = data_type + 's' if not data_type.endswith('s') else data_type
 
+    # Mettre à jour les métadonnées avec les propriétés globales
+    metadata.update(st.session_state.global_properties)
+
     st.session_state.extracted_data[page_key][storage_type][idx] = {
         'df': df,
         'structure': data_structure,
@@ -118,9 +121,12 @@ def display_data(data, page_num, data_idx, metadata=None, extraction_time=None, 
     if extraction_time:
         st.write(f"Dernière modification : {extraction_time}")
 
+    # Mettre à jour les métadonnées avec les propriétés globales
+    metadata.update(st.session_state.global_properties)
+
     # Afficher les métadonnées
     st.write("Métadonnées:")
-    st.json(metadata or {})
+    st.json(metadata)
 
     # Afficher la structure sous forme de dictionnaire JSON
     if st.button(f"Voir la structure du {data_type}", key=structure_key):
@@ -141,47 +147,37 @@ def display_data(data, page_num, data_idx, metadata=None, extraction_time=None, 
 
     st.write(f"Données du {data_type}:")
 
-    # Créer une configuration de colonne dynamique
-    column_config = {
-        col: st.column_config.Column(
-            label=col,
-            width="medium",
-            required=False
-        ) for col in df.columns
-    }
+    # Gestion des colonnes
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        new_column = st.text_input("Nom de la nouvelle colonne:", key=f"new_col_{data_key}")
+        if st.button("Ajouter une colonne", key=f"add_col_{data_key}"):
+            if new_column and new_column not in df.columns:
+                df[new_column] = ""
+                st.success(f"Colonne '{new_column}' ajoutée avec succès.")
+            elif new_column in df.columns:
+                st.warning(f"La colonne '{new_column}' existe déjà.")
+            else:
+                st.warning("Veuillez entrer un nom de colonne valide.")
 
-    # Ajouter une colonne pour permettre l'ajout de nouvelles colonnes
-    column_config[""] = st.column_config.Column(
-        label="Nouvelle colonne",
-        width="small",
-        required=False
-    )
+    with col2:
+        columns_to_remove = st.multiselect("Sélectionner les colonnes à supprimer:", df.columns,
+                                           key=f"remove_cols_{data_key}")
+        if st.button("Supprimer les colonnes sélectionnées", key=f"remove_col_{data_key}"):
+            if columns_to_remove:
+                df = df.drop(columns=columns_to_remove)
+                st.success(f"Colonne(s) {', '.join(columns_to_remove)} supprimée(s) avec succès.")
+            else:
+                st.warning("Aucune colonne sélectionnée pour la suppression.")
 
-    # Afficher l'éditeur de données avec une configuration dynamique
+    # Afficher l'éditeur de données
     try:
         edited_df = st.data_editor(
             df,
             num_rows="dynamic",
             use_container_width=True,
-            column_config=column_config,
             key=editor_key
         )
-
-        # Gérer l'ajout de nouvelles colonnes
-        new_columns = [col for col in edited_df.columns if col not in df.columns and col != ""]
-        for new_col in new_columns:
-            if new_col:
-                edited_df = edited_df.rename(columns={new_col: f"Nouvelle colonne {new_col}"})
-
-        # Supprimer la colonne vide si elle existe
-        if "" in edited_df.columns:
-            edited_df = edited_df.drop(columns=[""])
-
-        # Gérer la suppression de colonnes
-        deleted_columns = [col for col in df.columns if col not in edited_df.columns]
-        if deleted_columns:
-            st.info(f"Colonnes supprimées : {', '.join(deleted_columns)}")
-
     except Exception as e:
         st.error(f"Erreur lors de l'affichage de l'éditeur de données: {str(e)}")
         st.write(f"Affichage du {data_type} en lecture seule:")
@@ -190,29 +186,90 @@ def display_data(data, page_num, data_idx, metadata=None, extraction_time=None, 
 
     # Mettre à jour le DataFrame dans le session state si des modifications ont été apportées
     if not df.equals(edited_df):
-        update_session_state(data_key, edited_df, data, metadata, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), data_type)
+        update_session_state(data_key, edited_df, data, metadata, datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                             data_type)
 
-        # Préparer le nom du fichier pour le téléchargement
-        bank_name = metadata.get('bank_name', 'Banque_inconnue').replace(' ', '_')
-        client_name = metadata.get('client_name', 'Client_inconnu').replace(' ', '_')
-        portfolio_number = metadata.get('portfolio_number', 'Portfolio_inconnu').replace(' ', '_')
-        statement_date = metadata.get('statement_date', 'Date_inconnue').replace('/', '-')
-        extraction_date = datetime.now().strftime("%Y-%m-%d")
+    # Préparer le nom du fichier pour le téléchargement
+    bank_name = metadata.get('bank_name', 'Banque_inconnue').replace(' ', '_')
+    client_name = metadata.get('client_name', 'Client_inconnu').replace(' ', '_')
+    portfolio_number = metadata.get('portfolio_number', 'Portfolio_inconnu').replace(' ', '_')
+    statement_date = metadata.get('statement_date', 'Date_inconnue').replace('/', '-')
+    extraction_date = datetime.now().strftime("%Y-%m-%d")
 
-        file_name = f"{bank_name}_{client_name}_{portfolio_number}_page{page_num}_{data_type}{data_idx + 1}_{statement_date}_extrait_{extraction_date}.csv"
+    file_name = f"{bank_name}_{client_name}_{portfolio_number}_page{page_num}_{data_type}{data_idx + 1}_{statement_date}_extrait_{extraction_date}.csv"
 
-        # Nettoyer le nom du fichier pour éviter les caractères problématiques
-        file_name = "".join(c for c in file_name if c.isalnum() or c in ['_', '-', '.'])
+    # Nettoyer le nom du fichier pour éviter les caractères problématiques
+    file_name = "".join(c for c in file_name if c.isalnum() or c in ['_', '-', '.'])
 
-        # Bouton de téléchargement
-        csv = edited_df.to_csv(index=False, encoding='utf-8-sig', sep=';').encode('utf-8-sig')
-        st.download_button(
-            label=f"Télécharger le {data_type} {data_idx + 1} de la page {page_num}",
-            data=csv,
-            file_name=file_name,
-            mime="text/csv",
-            key=download_key
-        )
+    # Bouton de téléchargement
+    csv = edited_df.to_csv(index=False, encoding='utf-8-sig', sep=';').encode('utf-8-sig')
+    st.download_button(
+        label=f"Télécharger le {data_type} {data_idx + 1} de la page {page_num}",
+        data=csv,
+        file_name=file_name,
+        mime="text/csv",
+        key=download_key
+    )
+
+
+def display_global_properties():
+    st.header("Propriétés globales du document")
+
+    # Extraction automatique des propriétés globales à partir de la première page du PDF
+    if 'pdf_document' in st.session_state and st.session_state.pdf_document:
+        try:
+            # Extraire les données de la première page pour obtenir les métadonnées
+            first_page = st.session_state.pdf_document[0]
+            image = convert_pdf_to_image(first_page)
+            if image is not None:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as temp_image:
+                    image.save(temp_image.name, format="PNG")
+                    temp_image_path = temp_image.name
+
+                # Utiliser le LLM pour extraire les métadonnées de la première page
+                extracted_data = extract_tables_and_graphs_from_image(temp_image_path, model)
+                os.unlink(temp_image_path)
+
+                # Récupérer les métadonnées
+                metadata = extracted_data.get("metadata", {})
+                client_name = metadata.get('client_name', '')
+                bank_name = metadata.get('bank_name', '')
+                statement_date = metadata.get('statement_date', '')
+            else:
+                client_name, bank_name, statement_date = '', '', ''
+        except Exception as e:
+            logging.error(f"Erreur lors de l'extraction des propriétés globales: {str(e)}")
+            client_name, bank_name, statement_date = '', '', ''
+    else:
+        client_name, bank_name, statement_date = '', '', ''
+
+    # Initialiser les propriétés globales dans le session state à chaque changement de document PDF
+    st.session_state.global_properties = {
+        'client_name': client_name,
+        'bank_name': bank_name,
+        'statement_date': statement_date
+    }
+
+    # Afficher les propriétés globales et permettre la modification
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        client_name = st.text_input("Nom du client", st.session_state.global_properties['client_name'])
+    with col2:
+        bank_name = st.text_input("Nom de la banque", st.session_state.global_properties['bank_name'])
+    with col3:
+        statement_date = st.text_input("Date de l'extrait", st.session_state.global_properties['statement_date'])
+
+    # Bouton pour mettre à jour les propriétés globales
+    if st.button("Mettre à jour les propriétés globales"):
+        st.session_state.global_properties = {
+            'client_name': client_name,
+            'bank_name': bank_name,
+            'statement_date': statement_date
+        }
+        st.success("Propriétés globales mises à jour avec succès!")
+
+    return st.session_state.global_properties
 
 def display_page_and_results(page_num, pdf_document):
     st.markdown(f"### Page {page_num}")
@@ -290,6 +347,9 @@ if uploaded_file is not None:
             st.error("Impossible de réparer le PDF. Veuillez essayer avec un autre fichier.")
             st.stop()
 
+    # Afficher et gérer les propriétés globales
+    global_properties = display_global_properties()
+
     # Définir le dossier de sortie pour les CSV
     output_folder = os.path.join(os.getcwd(), 'Tests', 'output')
     os.makedirs(output_folder, exist_ok=True)
@@ -306,9 +366,7 @@ if uploaded_file is not None:
     if st.button("Extraire les données de toutes les pages sélectionnées"):
         with st.spinner('Extraction des données de toutes les pages sélectionnées en cours...'):
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                future_to_page = {
-                    executor.submit(extract_data_from_single_page, st.session_state.pdf_document, page_num,
-                                    output_folder, model): page_num for page_num in selected_pages}
+                future_to_page = {executor.submit(extract_data_from_single_page, st.session_state.pdf_document, page_num, output_folder, model): page_num for page_num in selected_pages}
                 for future in as_completed(future_to_page):
                     page_num = future_to_page[future]
                     try:
@@ -317,12 +375,10 @@ if uploaded_file is not None:
                             extraction_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             if extracted_data.get("tables"):
                                 for idx, table in enumerate(extracted_data["tables"]):
-                                    update_session_state(f"page_{page_num}_table_{idx}", table, table,
-                                                         extracted_data["metadata"], extraction_time, "tables")
+                                    update_session_state(f"page_{page_num}_table_{idx}", table, table, extracted_data["metadata"], extraction_time, "tables")
                             if extracted_data.get("graphs"):
                                 for idx, graph in enumerate(extracted_data["graphs"]):
-                                    update_session_state(f"page_{page_num}_graph_{idx}", graph, graph,
-                                                         extracted_data["metadata"], extraction_time, "graphs")
+                                    update_session_state(f"page_{page_num}_graph_{idx}", graph, graph, extracted_data["metadata"], extraction_time, "graphs")
                     except Exception as e:
                         st.error(f"Erreur lors de l'extraction de la page {page_num}: {str(e)}")
 
