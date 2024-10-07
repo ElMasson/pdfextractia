@@ -9,6 +9,9 @@ from dotenv import load_dotenv
 import logging
 import PyPDF2
 import traceback
+import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 
 # Configuration du logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -32,6 +35,8 @@ max_workers = st.sidebar.slider("Nombre de workers pour le traitement parallèle
 # Initialisation du session state
 if 'extracted_tables' not in st.session_state:
     st.session_state.extracted_tables = {}
+if 'pdf_document' not in st.session_state:
+    st.session_state.pdf_document = None
 
 
 def convert_pdf_to_image(page):
@@ -85,15 +90,31 @@ def extract_data_from_single_page(pdf_doc, page_num, output_folder, model):
         return {"metadata": {}, "tables": []}
 
 
-def display_table(table, page_num, table_idx, metadata):
+def update_session_state(table_key, df, table_structure, metadata, extraction_time):
+    page_num = int(table_key.split('_')[1])
+    table_idx = int(table_key.split('_')[3])
+    page_key = f"page_{page_num}"
+
+    if page_key not in st.session_state.extracted_tables:
+        st.session_state.extracted_tables[page_key] = {}
+
+    st.session_state.extracted_tables[page_key][table_idx] = {
+        'df': df,
+        'structure': table_structure,
+        'metadata': metadata,
+        'extraction_time': extraction_time or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+
+
+def display_table(table, page_num, table_idx, metadata=None, extraction_time=None):
     table_key = f"page_{page_num}_table_{table_idx}"
-
-    if table_key not in st.session_state.extracted_tables:
-        st.session_state.extracted_tables[table_key] = clean_and_prepare_table(table, metadata)
-
-    df = st.session_state.extracted_tables[table_key]
+    editor_key = f"editor_{table_key}"
+    download_key = f"download_{table_key}"
+    structure_key = f"structure_button_{table_key}"
 
     st.subheader(f"Tableau {table_idx + 1} de la page {page_num}")
+    if extraction_time:
+        st.write(f"Dernière modification : {extraction_time}")
 
     # Afficher les métadonnées
     st.write("Métadonnées:")
@@ -104,9 +125,12 @@ def display_table(table, page_num, table_idx, metadata):
         "Numéro de portefeuille": metadata.get("portfolio_number", "Non spécifié")
     })
 
-    if "table_info" in table:
-        st.write("Informations du tableau:")
-        st.json(table["table_info"])
+    # Afficher la structure sous forme de dictionnaire JSON
+    if st.button("Voir la structure du tableau", key=structure_key):
+        st.json(table)
+
+    # Préparer le DataFrame
+    df = clean_and_prepare_table(table, metadata) if isinstance(table, dict) else table
 
     if df.empty:
         st.warning("Le tableau extrait est vide ou n'a pas pu être correctement formaté.")
@@ -114,35 +138,69 @@ def display_table(table, page_num, table_idx, metadata):
 
     st.write("Données du tableau:")
 
-    # Permettre l'ajout et la suppression de colonnes
-    col1, col2 = st.columns(2)
-    with col1:
-        new_column = st.text_input("Ajouter une nouvelle colonne", key=f"new_col_{table_key}")
-        if new_column and new_column not in df.columns:
-            df[new_column] = ''
-            st.session_state.extracted_tables[table_key] = df
-
-    with col2:
-        columns_to_remove = st.multiselect("Sélectionner les colonnes à supprimer", df.columns,
-                                           key=f"remove_cols_{table_key}")
-        if columns_to_remove:
-            df = df.drop(columns=columns_to_remove)
-            st.session_state.extracted_tables[table_key] = df
-
     # Afficher l'éditeur de données
-    edited_df = st.data_editor(df, num_rows="dynamic", key=f"editor_{table_key}")
+    edited_df = st.data_editor(
+        df,
+        num_rows="dynamic",
+        use_container_width=True,
+        key=editor_key
+    )
 
-    # Mettre à jour le DataFrame dans le session state
-    st.session_state.extracted_tables[table_key] = edited_df
+    # Mettre à jour le DataFrame dans le session state si des modifications ont été apportées
+    if not df.equals(edited_df):
+        update_session_state(table_key, edited_df, table, metadata, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
     # Bouton de téléchargement
-    csv = edited_df.to_csv(index=False).encode('utf-8')
+    csv = edited_df.to_csv(index=False, encoding='utf-8-sig', sep=';').encode('utf-8-sig')
     st.download_button(
         label=f"Télécharger le tableau {table_idx + 1} de la page {page_num}",
         data=csv,
         file_name=f"page_{page_num}_tableau_{table_idx + 1}.csv",
         mime="text/csv",
+        key=download_key
     )
+
+
+def display_page_and_results(page_num, pdf_document):
+    st.markdown(f"### Page {page_num}")
+    col1, col2 = st.columns([3, 2])
+
+    with col1:
+        try:
+            page = pdf_document[page_num - 1]
+            image = convert_pdf_to_image(page)
+            if image:
+                st.image(image, caption=f"Page {page_num}", use_column_width=True)
+            else:
+                st.warning(f"Impossible d'afficher la page {page_num}")
+        except Exception as e:
+            st.warning(f"Erreur lors de l'affichage de la page {page_num}: {str(e)}")
+
+    with col2:
+        # Bouton d'extraction pour chaque page
+        if st.button(f"Extraire les tableaux de la page {page_num}", key=f"extract_{page_num}"):
+            with st.spinner(f'Extraction des tableaux de la page {page_num} en cours...'):
+                extracted_data = extract_data_from_single_page(pdf_document, page_num, output_folder, model)
+                if extracted_data and extracted_data["tables"]:
+                    extraction_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    st.success(f'Extraction de la page {page_num} terminée !')
+                    for idx, table in enumerate(extracted_data["tables"]):
+                        update_session_state(f"page_{page_num}_table_{idx}", table, table, extracted_data["metadata"],
+                                             extraction_time)
+                elif extracted_data:
+                    st.warning(f"Aucun tableau trouvé sur la page {page_num}")
+
+        # Afficher les tableaux extraits pour cette page
+        page_key = f"page_{page_num}"
+        if page_key in st.session_state.extracted_tables:
+            for table_idx, table_data in st.session_state.extracted_tables[page_key].items():
+                display_table(
+                    table_data['df'],
+                    page_num,
+                    table_idx,
+                    table_data['metadata'],
+                    table_data['extraction_time']
+                )
 
 
 # Upload du fichier PDF
@@ -156,12 +214,12 @@ if uploaded_file is not None:
 
     # Tenter d'ouvrir le PDF
     try:
-        pdf_document = fitz.open(pdf_path)
+        st.session_state.pdf_document = fitz.open(pdf_path)
     except Exception as e:
         st.warning("Le PDF semble être corrompu. Tentative de réparation...")
         repaired_pdf_path = attempt_pdf_repair(pdf_path)
         if repaired_pdf_path:
-            pdf_document = fitz.open(repaired_pdf_path)
+            st.session_state.pdf_document = fitz.open(repaired_pdf_path)
             st.success("PDF réparé avec succès!")
         else:
             st.error("Impossible de réparer le PDF. Veuillez essayer avec un autre fichier.")
@@ -172,7 +230,7 @@ if uploaded_file is not None:
     os.makedirs(output_folder, exist_ok=True)
 
     # Sélection des pages
-    num_pages = len(pdf_document)
+    num_pages = len(st.session_state.pdf_document)
     selected_pages = st.multiselect(
         "Sélectionnez les pages à traiter",
         options=list(range(1, num_pages + 1)),
@@ -181,64 +239,31 @@ if uploaded_file is not None:
 
     # Bouton pour extraire toutes les pages sélectionnées
     if st.button("Extraire les tableaux de toutes les pages sélectionnées"):
-        for page_num in selected_pages:
-            with st.spinner(f'Extraction des tableaux de la page {page_num} en cours...'):
-                extracted_data = extract_data_from_single_page(pdf_document, page_num, output_folder, model)
-                if extracted_data["tables"]:
-                    st.success(f'Extraction de la page {page_num} terminée !')
-                    for idx, table in enumerate(extracted_data["tables"]):
-                        display_table(table, page_num, idx, extracted_data["metadata"])
-                else:
-                    st.warning(f"Aucun tableau trouvé sur la page {page_num}")
+        with st.spinner('Extraction des tableaux de toutes les pages sélectionnées en cours...'):
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_page = {
+                    executor.submit(extract_data_from_single_page, st.session_state.pdf_document, page_num,
+                                    output_folder, model): page_num for page_num in selected_pages}
+                for future in as_completed(future_to_page):
+                    page_num = future_to_page[future]
+                    try:
+                        extracted_data = future.result()
+                        if extracted_data and extracted_data["tables"]:
+                            extraction_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            for idx, table in enumerate(extracted_data["tables"]):
+                                update_session_state(f"page_{page_num}_table_{idx}", table, table,
+                                                     extracted_data["metadata"], extraction_time)
+                    except Exception as e:
+                        st.error(f"Erreur lors de l'extraction de la page {page_num}: {str(e)}")
 
-    # Affichage des pages individuelles
+        st.success('Extraction de toutes les pages terminée !')
+
+    # Affichage des pages individuelles et de leurs résultats
     for page_num in selected_pages:
-        st.markdown(f"### Page {page_num}")
-        col1, col2 = st.columns([3, 2])
-
-        with col1:
-            try:
-                page = pdf_document[page_num - 1]
-                image = convert_pdf_to_image(page)
-                if image:
-                    st.image(image, caption=f"Page {page_num}", use_column_width=True)
-                else:
-                    st.warning(f"Impossible d'afficher la page {page_num}")
-            except Exception as e:
-                st.warning(f"Erreur lors de l'affichage de la page {page_num}: {str(e)}")
-
-        with col2:
-            if st.button(f"Extraire les tableaux de la page {page_num}", key=f"extract_{page_num}"):
-                with st.spinner(f'Extraction des tableaux de la page {page_num} en cours...'):
-                    extracted_data = extract_data_from_single_page(pdf_document, page_num, output_folder, model)
-                    if extracted_data["tables"]:
-                        st.success(f'Extraction de la page {page_num} terminée !')
-                        for idx, table in enumerate(extracted_data["tables"]):
-                            display_table(table, page_num, idx, extracted_data["metadata"])
-                    else:
-                        st.warning(f"Aucun tableau trouvé sur la page {page_num}")
-
-        st.markdown("---")
-
-    # Afficher tous les tableaux extraits précédemment
-    st.markdown("## Tous les tableaux extraits")
-    for key, df in st.session_state.extracted_tables.items():
-        page_num, table_idx = key.split('_')[1], key.split('_')[3]
-        st.subheader(f"Tableau {table_idx} de la page {page_num}")
-        st.dataframe(df)
-
-        # Bouton de téléchargement pour chaque tableau
-        csv = df.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label=f"Télécharger le tableau {table_idx} de la page {page_num}",
-            data=csv,
-            file_name=f"{key}.csv",
-            mime="text/csv",
-            key=f"download_{key}"
-        )
+        display_page_and_results(page_num, st.session_state.pdf_document)
 
     # Fermer le document PDF
-    pdf_document.close()
+    st.session_state.pdf_document.close()
 
     # Supprimer les fichiers temporaires
     os.unlink(pdf_path)

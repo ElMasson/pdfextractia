@@ -37,28 +37,29 @@ def extract_tables_from_image(image_path: str, model: str = "gpt-4o") -> Dict[st
        - Nom de la banque
        - Date du relevé
        - Nom du client
-       - Numéro(s) de portefeuille client visible(s)
+       - Tout numéro de portefeuille client visible
 
-    2. Pour chaque tableau identifié :
-       a. Repérez TOUS les en-têtes de colonnes, y compris ceux sur plusieurs lignes. Fusionnez-les correctement.
-       b. Pour les colonnes sans en-tête explicite, attribuez un nom descriptif basé sur le contenu.
-       c. Assurez-vous que chaque colonne a un en-tête unique et significatif.
-       d. Capturez toutes les données, y compris les lignes qui pourraient sembler être des sous-sections.
+    2. Analyse des tableaux :
+       - Déterminez s'il y a un seul grand tableau ou plusieurs tableaux distincts.
+       - Pour chaque tableau identifié :
+         a. Repérez tous les en-têtes de colonnes, même s'ils sont sur plusieurs lignes.
+         b. Identifiez les colonnes sans en-tête et attribuez-leur un nom générique (ex: "Colonne non nommée 1").
+         c. Capturez toutes les données, y compris les lignes qui pourraient sembler être des sous-sections.
 
-    3. Pour chaque tableau, créez un dictionnaire avec :
-       - 'headers': liste de tous les en-têtes de colonnes (fusionnés et uniques)
+    3. Extraction des données :
+       Pour chaque tableau, créez un dictionnaire avec :
+       - 'headers': liste de tous les en-têtes de colonnes (incluant les noms génériques pour les colonnes sans en-tête)
        - 'data': liste de listes, chaque sous-liste représentant une ligne complète de données
-       - 'table_info': informations spécifiques au tableau (ex: titre, sous-totaux)
-       - 'metadata': lien vers les informations générales (banque, client, date, portefeuille)
+       - 'table_info': informations spécifiques au tableau (ex: numéro de portefeuille associé, totaux, sous-totaux)
 
     4. Réflexion critique :
-       - Vérifiez que tous les en-têtes sont capturés et correctement fusionnés.
-       - Assurez-vous que le nombre de colonnes dans 'headers' correspond exactement au nombre d'éléments dans chaque ligne de 'data'.
-       - Vérifiez que chaque tableau est lié aux métadonnées appropriées.
+       - Assurez-vous que tous les en-têtes sont capturés, même ceux qui semblent être des titres de section.
+       - Vérifiez que le nombre de colonnes dans 'headers' correspond exactement au nombre d'éléments dans chaque ligne de 'data'.
+       - Examinez si des informations importantes ont été omises ou mal interprétées.
 
     5. Amélioration :
-       - Si des problèmes sont identifiés, corrigez-les avant de finaliser l'extraction.
-       - Assurez-vous que la structure des données reflète fidèlement la disposition visuelle du relevé.
+       - Si vous avez identifié des problèmes lors de la réflexion critique, corrigez-les.
+       - Assurez-vous que la structure des données capturées reflète fidèlement la disposition visuelle du relevé.
 
     Formatez votre réponse comme un dictionnaire Python valide contenant :
     {
@@ -72,8 +73,7 @@ def extract_tables_from_image(image_path: str, model: str = "gpt-4o") -> Dict[st
             {
                 "headers": [...],
                 "data": [...],
-                "table_info": {...},
-                "metadata": {...}
+                "table_info": {...}
             },
             ...
         ]
@@ -113,127 +113,24 @@ def extract_tables_from_image(image_path: str, model: str = "gpt-4o") -> Dict[st
         logging.error(f"Aucun dictionnaire Python valide trouvé dans la réponse. Contenu reçu : {content}")
         return {"metadata": {}, "tables": []}
 
-    # Vérification et ajustement des données extraites
-    for table in extracted_data['tables']:
-        headers = table['headers']
-        data = table['data']
-        max_columns = max(len(row) for row in data)
-
-        if len(headers) != max_columns:
-            logging.warning(
-                f"Discordance entre le nombre d'en-têtes ({len(headers)}) et le nombre maximum de colonnes ({max_columns}). Ajustement effectué.")
-            if len(headers) < max_columns:
-                headers.extend([f"Colonne non nommée {i + 1}" for i in range(len(headers), max_columns)])
-            else:
-                headers = headers[:max_columns]
-
-        adjusted_data = []
-        for row in data:
-            if len(row) < max_columns:
-                adjusted_row = row + [''] * (max_columns - len(row))
-            elif len(row) > max_columns:
-                adjusted_row = row[:max_columns]
-            else:
-                adjusted_row = row
-            adjusted_data.append(adjusted_row)
-
-        table['headers'] = headers
-        table['data'] = adjusted_data
-
-    def make_unique(headers):
-        seen = {}
-        unique_headers = []
-        for header in headers:
-            if header in seen:
-                seen[header] += 1
-                unique_headers.append(f"{header}_{seen[header]}")
-            else:
-                seen[header] = 0
-                unique_headers.append(header)
-        return unique_headers
-
-    for table in extracted_data['tables']:
-        table['headers'] = make_unique(table['headers'])
-
     return extracted_data
 
-
-def clean_and_prepare_table(table: Dict[str, Any]) -> pd.DataFrame:
+def clean_and_prepare_table(table: Dict[str, Any], metadata: Dict[str, str]) -> pd.DataFrame:
+    """Nettoie et prépare le tableau pour la création d'un DataFrame."""
     headers = table['headers']
     data = table['data']
-
-    # Fusionner les en-têtes multi-lignes
-    merged_headers = []
-    for header_group in zip(*[iter(headers)] * 2):
-        merged_header = ' '.join(filter(None, header_group)).strip()
-        merged_headers.append(merged_header if merged_header else f"Colonne {len(merged_headers) + 1}")
-
-    # S'assurer que les en-têtes sont uniques
-    unique_headers = make_unique(merged_headers)
-
-    # Ajuster les données si nécessaire
-    max_columns = len(unique_headers)
-    adjusted_data = [row + [''] * (max_columns - len(row)) for row in data]
-
-    df = pd.DataFrame(adjusted_data, columns=unique_headers)
-
-    # Supprimer les lignes entièrement vides
-    df = df.dropna(how='all')
-
-    # Convertir les colonnes numériques
-    for col in df.columns:
-        df[col] = pd.to_numeric(df[col], errors='ignore')
-
-    return df
-
-def make_headers_unique(headers: List[str]) -> List[str]:
-    """
-    Rend les noms de colonnes uniques en ajoutant un suffixe numérique aux doublons.
-    """
-    seen = {}
-    unique_headers = []
-    for header in headers:
-        if header in seen:
-            seen[header] += 1
-            unique_headers.append(f"{header}_{seen[header]}")
-        else:
-            seen[header] = 0
-            unique_headers.append(header)
-    return unique_headers
-
-def make_unique(headers):
-    seen = {}
-    unique_headers = []
-    for header in headers:
-        if header in seen:
-            seen[header] += 1
-            unique_headers.append(f"{header}_{seen[header]}")
-        else:
-            seen[header] = 0
-            unique_headers.append(header)
-    return unique_headers
-
-
-def clean_and_prepare_table(table: Dict[str, Any], metadata: Dict[str, str]) -> pd.DataFrame:
-    headers = table.get('headers', [])
-    data = table.get('data', [])
-
-    logging.info(f"Headers: {headers}")
-    logging.info(f"Data sample: {data[:2] if data else 'No data'}")
 
     # Fusionner les en-têtes multi-lignes si nécessaire
     if len(headers) > 1 and isinstance(headers[0], list):
         merged_headers = []
         for header_group in zip(*headers):
             merged_header = ' '.join(filter(None, header_group)).strip()
-            merged_headers.append(merged_header if merged_header else f"Colonne {len(merged_headers) + 1}")
+            merged_headers.append(merged_header if merged_header else f"Colonne {len(merged_headers)+1}")
     else:
         merged_headers = headers
 
     # S'assurer que les en-têtes sont uniques
     unique_headers = make_unique(merged_headers)
-
-    logging.info(f"Unique headers: {unique_headers}")
 
     # Ajuster les données si nécessaire
     max_columns = len(unique_headers)
@@ -246,16 +143,7 @@ def clean_and_prepare_table(table: Dict[str, Any], metadata: Dict[str, str]) -> 
             logging.warning(f"Unexpected row format: {row}")
             adjusted_data.append([str(row)] + [''] * (max_columns - 1))
 
-    logging.info(f"Adjusted data sample: {adjusted_data[:2] if adjusted_data else 'No data'}")
-
-    try:
-        df = pd.DataFrame(adjusted_data, columns=unique_headers)
-    except ValueError as e:
-        logging.error(f"Error creating DataFrame: {str(e)}")
-        logging.error(f"Columns: {unique_headers}")
-        logging.error(f"Data shape: {len(adjusted_data)}x{len(adjusted_data[0]) if adjusted_data else 0}")
-        # Créer un DataFrame vide si la création échoue
-        df = pd.DataFrame(columns=unique_headers)
+    df = pd.DataFrame(adjusted_data, columns=unique_headers)
 
     # Ajouter les métadonnées comme colonnes
     df['Banque'] = metadata.get('bank_name', '')
@@ -271,89 +159,18 @@ def clean_and_prepare_table(table: Dict[str, Any], metadata: Dict[str, str]) -> 
         df[col] = pd.to_numeric(df[col], errors='ignore')
 
     return df
-def make_column_names_unique(df: pd.DataFrame) -> pd.DataFrame:
-    """Rend les noms de colonnes uniques en ajoutant des suffixes numériques aux doublons."""
-    df.columns = df.columns.astype(str).str.strip()  # Supprimer les espaces
 
+def make_unique(headers):
+    """Rend les noms de colonnes uniques en ajoutant un suffixe numérique aux doublons."""
     seen = {}
-    new_columns = []
-    for col in df.columns:
-        cnt = seen.get(col, 0)
-        if cnt > 0:
-            new_col = f"{col}_{cnt}"
-            while new_col in seen:
-                cnt += 1
-                new_col = f"{col}_{cnt}"
-            seen[col] = cnt
-            seen[new_col] = 1
-            new_columns.append(new_col)
+    unique_headers = []
+    for header in headers:
+        if header in seen:
+            seen[header] += 1
+            unique_headers.append(f"{header}_{seen[header]}")
         else:
-            seen[col] = 1
-            new_columns.append(col)
-    df.columns = new_columns
-    return df
+            seen[header] = 0
+            unique_headers.append(header)
+    return unique_headers
 
-
-def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
-    """Nettoie le DataFrame en supprimant les lignes vides, en rendant les noms de colonnes uniques et en convertissant les types de données."""
-    df = df.dropna(how='all').reset_index(drop=True)
-
-    if df.empty:
-        logging.warning("Le DataFrame est vide après suppression des lignes NaN.")
-        return df
-
-    df = make_column_names_unique(df)
-
-    for col in df.columns:
-        try:
-            df[col] = pd.to_numeric(df[col], errors='ignore')
-        except Exception as e:
-            logging.error(f"Erreur lors de la conversion de la colonne {col} en numérique : {e}")
-
-    return df
-
-
-def save_to_csv(dataframe: pd.DataFrame, output_path: str):
-    """Sauvegarde un DataFrame en CSV."""
-    try:
-        dataframe.to_csv(output_path, index=False)
-        logging.info(f"Table sauvegardée dans {output_path}")
-    except Exception as e:
-        logging.error(f"Erreur lors de la sauvegarde en CSV : {e}")
-
-
-def extract_tables_from_pdf(pdf_path: str, output_folder: str):
-    """Extrait les tableaux d'un PDF et les sauvegarde en CSV."""
-    os.makedirs(output_folder, exist_ok=True)
-
-    import fitz  # PyMuPDF
-
-    pdf_document = fitz.open(pdf_path)
-    for page_num in range(len(pdf_document)):
-        page = pdf_document[page_num]
-        pix = page.get_pixmap()
-        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as temp_image:
-            img.save(temp_image.name, format="PNG")
-            tables = extract_tables_from_image(temp_image.name)
-
-        os.unlink(temp_image.name)
-
-        for i, table in enumerate(tables):
-            table = clean_dataframe(table)
-            output_path = os.path.join(output_folder, f"page_{page_num + 1}_table_{i + 1}.csv")
-            save_to_csv(table, output_path)
-
-    pdf_document.close()
-
-
-if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Extrait les tableaux d'un PDF et les sauvegarde en CSV.")
-    parser.add_argument("pdf_path", help="Chemin vers le fichier PDF")
-    parser.add_argument("--output", default="extracted_tables", help="Dossier de sortie pour les CSV")
-    args = parser.parse_args()
-
-    extract_tables_from_pdf(args.pdf_path, args.output)
+# Autres fonctions utilitaires si nécessaire
