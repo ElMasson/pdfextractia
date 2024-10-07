@@ -234,7 +234,19 @@ def display_global_properties():
                 metadata = extracted_data.get("metadata", {})
                 client_name = metadata.get('client_name', '')
                 bank_name = metadata.get('bank_name', '')
-                statement_date = metadata.get('statement_date', '')
+
+                # Amélioration de l'identification de la date du relevé
+                # Rechercher la date spécifique associée au relevé plutôt que d'autres dates possibles
+                possible_dates = metadata.get('dates', [])  # Supposons que toutes les dates possibles sont listées
+                statement_date = ''
+                for date in possible_dates:
+                    if 'janvier' in date.lower() or 'février' in date.lower() or 'mars' in date.lower() or \
+                            'avril' in date.lower() or 'mai' in date.lower() or 'juin' in date.lower() or \
+                            'juillet' in date.lower() or 'août' in date.lower() or 'septembre' in date.lower() or \
+                            'octobre' in date.lower() or 'novembre' in date.lower() or 'décembre' in date.lower():
+                        statement_date = date
+                        break
+
             else:
                 client_name, bank_name, statement_date = '', '', ''
         except Exception as e:
