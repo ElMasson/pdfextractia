@@ -141,10 +141,23 @@ def display_data(data, page_num, data_idx, metadata=None, extraction_time=None, 
 
     st.write(f"Données du {data_type}:")
 
-    # Créer une configuration de colonne simplifiée
-    column_config = {col: st.column_config.Column(label=col) for col in df.columns}
+    # Créer une configuration de colonne dynamique
+    column_config = {
+        col: st.column_config.Column(
+            label=col,
+            width="medium",
+            required=False
+        ) for col in df.columns
+    }
 
-    # Afficher l'éditeur de données avec une configuration simplifiée
+    # Ajouter une colonne pour permettre l'ajout de nouvelles colonnes
+    column_config[""] = st.column_config.Column(
+        label="Nouvelle colonne",
+        width="small",
+        required=False
+    )
+
+    # Afficher l'éditeur de données avec une configuration dynamique
     try:
         edited_df = st.data_editor(
             df,
@@ -153,6 +166,22 @@ def display_data(data, page_num, data_idx, metadata=None, extraction_time=None, 
             column_config=column_config,
             key=editor_key
         )
+
+        # Gérer l'ajout de nouvelles colonnes
+        new_columns = [col for col in edited_df.columns if col not in df.columns and col != ""]
+        for new_col in new_columns:
+            if new_col:
+                edited_df = edited_df.rename(columns={new_col: f"Nouvelle colonne {new_col}"})
+
+        # Supprimer la colonne vide si elle existe
+        if "" in edited_df.columns:
+            edited_df = edited_df.drop(columns=[""])
+
+        # Gérer la suppression de colonnes
+        deleted_columns = [col for col in df.columns if col not in edited_df.columns]
+        if deleted_columns:
+            st.info(f"Colonnes supprimées : {', '.join(deleted_columns)}")
+
     except Exception as e:
         st.error(f"Erreur lors de l'affichage de l'éditeur de données: {str(e)}")
         st.write(f"Affichage du {data_type} en lecture seule:")
@@ -161,8 +190,7 @@ def display_data(data, page_num, data_idx, metadata=None, extraction_time=None, 
 
     # Mettre à jour le DataFrame dans le session state si des modifications ont été apportées
     if not df.equals(edited_df):
-        update_session_state(data_key, edited_df, data, metadata, datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                             data_type)
+        update_session_state(data_key, edited_df, data, metadata, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), data_type)
 
     # Bouton de téléchargement
     csv = edited_df.to_csv(index=False, encoding='utf-8-sig', sep=';').encode('utf-8-sig')
@@ -173,7 +201,6 @@ def display_data(data, page_num, data_idx, metadata=None, extraction_time=None, 
         mime="text/csv",
         key=download_key
     )
-
 
 def display_page_and_results(page_num, pdf_document):
     st.markdown(f"### Page {page_num}")
