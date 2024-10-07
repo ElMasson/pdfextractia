@@ -192,15 +192,27 @@ def display_data(data, page_num, data_idx, metadata=None, extraction_time=None, 
     if not df.equals(edited_df):
         update_session_state(data_key, edited_df, data, metadata, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), data_type)
 
-    # Bouton de téléchargement
-    csv = edited_df.to_csv(index=False, encoding='utf-8-sig', sep=';').encode('utf-8-sig')
-    st.download_button(
-        label=f"Télécharger le {data_type} {data_idx + 1} de la page {page_num}",
-        data=csv,
-        file_name=f"page_{page_num}_{data_type}_{data_idx + 1}.csv",
-        mime="text/csv",
-        key=download_key
-    )
+        # Préparer le nom du fichier pour le téléchargement
+        bank_name = metadata.get('bank_name', 'Banque_inconnue').replace(' ', '_')
+        client_name = metadata.get('client_name', 'Client_inconnu').replace(' ', '_')
+        portfolio_number = metadata.get('portfolio_number', 'Portfolio_inconnu').replace(' ', '_')
+        statement_date = metadata.get('statement_date', 'Date_inconnue').replace('/', '-')
+        extraction_date = datetime.now().strftime("%Y-%m-%d")
+
+        file_name = f"{bank_name}_{client_name}_{portfolio_number}_page{page_num}_{data_type}{data_idx + 1}_{statement_date}_extrait_{extraction_date}.csv"
+
+        # Nettoyer le nom du fichier pour éviter les caractères problématiques
+        file_name = "".join(c for c in file_name if c.isalnum() or c in ['_', '-', '.'])
+
+        # Bouton de téléchargement
+        csv = edited_df.to_csv(index=False, encoding='utf-8-sig', sep=';').encode('utf-8-sig')
+        st.download_button(
+            label=f"Télécharger le {data_type} {data_idx + 1} de la page {page_num}",
+            data=csv,
+            file_name=file_name,
+            mime="text/csv",
+            key=download_key
+        )
 
 def display_page_and_results(page_num, pdf_document):
     st.markdown(f"### Page {page_num}")
