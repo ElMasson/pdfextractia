@@ -23,15 +23,15 @@ if not api_key:
 client = OpenAI(api_key=api_key)
 
 
-def extract_tables_from_image(image_path: str, model: str = "gpt-4o") -> Dict[str, Any]:
-    """Extrait les tableaux et les métadonnées d'une image en utilisant GPT-4o en mode multimodal."""
+def extract_tables_and_graphs_from_image(image_path: str, model: str = "gpt-4o") -> Dict[str, Any]:
+    """Extrait les tableaux et les graphiques d'une image en utilisant GPT-4o en mode multimodal."""
 
     # Lire l'image et l'encoder en base64
     with open(image_path, "rb") as image_file:
         encoded_image = base64.b64encode(image_file.read()).decode('utf-8')
 
     prompt = """
-    Analysez attentivement cette image d'un relevé bancaire et suivez ces étapes :
+    Analysez attentivement cette image d'un relevé de fortune et suivez ces étapes :
 
     1. Identification générale :
        - Nom de la banque
@@ -40,24 +40,32 @@ def extract_tables_from_image(image_path: str, model: str = "gpt-4o") -> Dict[st
        - Tout numéro de portefeuille client visible
 
     2. Analyse des tableaux :
-       - Déterminez s'il y a un seul grand tableau ou plusieurs tableaux distincts.
+       - Déterminez s'il y a un ou plusieurs tableaux distincts.
        - Pour chaque tableau identifié :
          a. Repérez tous les en-têtes de colonnes, même s'ils sont sur plusieurs lignes.
          b. Identifiez les colonnes sans en-tête et attribuez-leur un nom générique (ex: "Colonne non nommée 1").
          c. Capturez toutes les données, y compris les lignes qui pourraient sembler être des sous-sections.
 
-    3. Extraction des données :
-       Pour chaque tableau, créez un dictionnaire avec :
+    3. Analyse des graphiques :
+       - Identifiez tous les graphiques présents dans l'image.
+       - Pour chaque graphique :
+         a. Décrivez le type de graphique (ex: courbe, barre, camembert).
+         b. Identifiez les axes et leurs étiquettes.
+         c. Extrayez les données représentées dans le graphique sous forme de tableau.
+         d. Soit très précis sur l'extraction des données pour obtenir les informations de graphiques complexes.
+
+    4. Extraction des données :
+       Pour chaque tableau et graphique, créez un dictionnaire avec :
        - 'headers': liste de tous les en-têtes de colonnes (incluant les noms génériques pour les colonnes sans en-tête)
        - 'data': liste de listes, chaque sous-liste représentant une ligne complète de données
-       - 'table_info': informations spécifiques au tableau (ex: numéro de portefeuille associé, totaux, sous-totaux)
+       - 'info': informations spécifiques au tableau ou au graphique (ex: titre, description)
 
-    4. Réflexion critique :
+    5. Réflexion critique :
        - Assurez-vous que tous les en-têtes sont capturés, même ceux qui semblent être des titres de section.
        - Vérifiez que le nombre de colonnes dans 'headers' correspond exactement au nombre d'éléments dans chaque ligne de 'data'.
        - Examinez si des informations importantes ont été omises ou mal interprétées.
 
-    5. Amélioration :
+    6. Amélioration :
        - Si vous avez identifié des problèmes lors de la réflexion critique, corrigez-les.
        - Assurez-vous que la structure des données capturées reflète fidèlement la disposition visuelle du relevé.
 
@@ -73,7 +81,16 @@ def extract_tables_from_image(image_path: str, model: str = "gpt-4o") -> Dict[st
             {
                 "headers": [...],
                 "data": [...],
-                "table_info": {...}
+                "info": {...}
+            },
+            ...
+        ],
+        "graphs": [
+            {
+                "type": "...",
+                "headers": [...],
+                "data": [...],
+                "info": {...}
             },
             ...
         ]
@@ -108,10 +125,10 @@ def extract_tables_from_image(image_path: str, model: str = "gpt-4o") -> Dict[st
                 extracted_data = ast.literal_eval(dict_string)
             except (ValueError, SyntaxError):
                 logging.error(f"Erreur lors de l'évaluation du contenu. Contenu reçu : {content}")
-                return {"metadata": {}, "tables": []}
+                return {"metadata": {}, "tables": [], "graphs": []}
     else:
         logging.error(f"Aucun dictionnaire Python valide trouvé dans la réponse. Contenu reçu : {content}")
-        return {"metadata": {}, "tables": []}
+        return {"metadata": {}, "tables": [], "graphs": []}
 
     return extracted_data
 
@@ -172,5 +189,4 @@ def make_unique(headers):
             seen[header] = 0
             unique_headers.append(header)
     return unique_headers
-
 # Autres fonctions utilitaires si nécessaire

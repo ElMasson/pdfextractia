@@ -4,7 +4,7 @@ import tempfile
 import pandas as pd
 from PIL import Image
 import fitz  # PyMuPDF
-from pdf_table_extractor_improved import extract_tables_from_image, clean_and_prepare_table
+from pdf_table_extractor_improved import extract_tables_and_graphs_from_image, clean_and_prepare_table
 from dotenv import load_dotenv
 import logging
 import PyPDF2
@@ -26,15 +26,15 @@ if not os.getenv("OPENAI_API_KEY"):
 
 # Configuration de la page Streamlit
 st.set_page_config(layout="wide")
-st.title("Extracteur de tableaux PDF")
+st.title("Extracteur de tableaux et graphiques PDF")
 
 # Paramètres de l'application
 model = st.sidebar.selectbox("Modèle GPT à utiliser", ["gpt-4o", "gpt-4o-mini"], index=0)
 max_workers = st.sidebar.slider("Nombre de workers pour le traitement parallèle", 1, os.cpu_count(), 2)
 
 # Initialisation du session state
-if 'extracted_tables' not in st.session_state:
-    st.session_state.extracted_tables = {}
+if 'extracted_data' not in st.session_state:
+    st.session_state.extracted_data = {}
 if 'pdf_document' not in st.session_state:
     st.session_state.pdf_document = None
 
@@ -80,69 +80,66 @@ def extract_data_from_single_page(pdf_doc, page_num, output_folder, model):
             image.save(temp_image.name, format="PNG")
             temp_image_path = temp_image.name
 
-        extracted_data = extract_tables_from_image(temp_image_path, model)
+        extracted_data = extract_tables_and_graphs_from_image(temp_image_path, model)
         os.unlink(temp_image_path)
         return extracted_data
     except Exception as e:
         logging.error(f"Erreur lors de l'extraction de la page {page_num}: {e}")
         logging.error(traceback.format_exc())
         st.error(f"Erreur lors de l'extraction de la page {page_num}: {e}")
-        return {"metadata": {}, "tables": []}
+        return {"metadata": {}, "tables": [], "graphs": []}
 
 
-def update_session_state(table_key, df, table_structure, metadata, extraction_time):
-    page_num = int(table_key.split('_')[1])
-    table_idx = int(table_key.split('_')[3])
+def update_session_state(data_key, df, data_structure, metadata, extraction_time, data_type):
+    page_num = int(data_key.split('_')[1])
+    idx = int(data_key.split('_')[3])
     page_key = f"page_{page_num}"
 
-    if page_key not in st.session_state.extracted_tables:
-        st.session_state.extracted_tables[page_key] = {}
+    if page_key not in st.session_state.extracted_data:
+        st.session_state.extracted_data[page_key] = {"tables": {}, "graphs": {}}
 
-    st.session_state.extracted_tables[page_key][table_idx] = {
+    storage_type = data_type + 's' if not data_type.endswith('s') else data_type
+
+    st.session_state.extracted_data[page_key][storage_type][idx] = {
         'df': df,
-        'structure': table_structure,
+        'structure': data_structure,
         'metadata': metadata,
-        'extraction_time': extraction_time or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        'extraction_time': extraction_time
     }
 
 
-def display_table(table, page_num, table_idx, metadata=None, extraction_time=None):
-    table_key = f"page_{page_num}_table_{table_idx}"
-    editor_key = f"editor_{table_key}"
-    download_key = f"download_{table_key}"
-    structure_key = f"structure_button_{table_key}"
+def display_data(data, page_num, data_idx, metadata=None, extraction_time=None, data_type="table"):
+    data_key = f"page_{page_num}_{data_type}_{data_idx}"
+    editor_key = f"editor_{data_key}"
+    download_key = f"download_{data_key}"
+    structure_key = f"structure_button_{data_key}"
 
-    st.subheader(f"Tableau {table_idx + 1} de la page {page_num}")
+    st.subheader(f"{data_type.capitalize()} {data_idx + 1} de la page {page_num}")
     if extraction_time:
         st.write(f"Dernière modification : {extraction_time}")
 
     # Afficher les métadonnées
     st.write("Métadonnées:")
-    st.json({
-        "Banque": metadata.get("bank_name", "Non spécifié"),
-        "Client": metadata.get("client_name", "Non spécifié"),
-        "Date du relevé": metadata.get("statement_date", "Non spécifié"),
-        "Numéro de portefeuille": metadata.get("portfolio_number", "Non spécifié")
-    })
+    st.json(metadata or {})
 
     # Afficher la structure sous forme de dictionnaire JSON
-    if st.button("Voir la structure du tableau", key=structure_key):
-        st.json(table)
+    if st.button(f"Voir la structure du {data_type}", key=structure_key):
+        st.json(data)
 
     # Préparer le DataFrame
-    if isinstance(table, dict):
-        df = clean_and_prepare_table(table, metadata)
-    elif isinstance(table, pd.DataFrame):
-        df = table
+    if isinstance(data, dict):
+        df = clean_and_prepare_table(data, metadata)
+    elif isinstance(data, pd.DataFrame):
+        df = data
     else:
-        st.warning("Format de données non reconnu pour ce tableau.")
+        st.warning(f"Format de données non reconnu pour ce {data_type}.")
         return
 
     if df.empty:
-        st.warning("Le tableau extrait est vide ou n'a pas pu être correctement formaté.")
+        st.warning(f"Le {data_type} extrait est vide ou n'a pas pu être correctement formaté.")
         return
 
-    st.write("Données du tableau:")
+    st.write(f"Données du {data_type}:")
 
     # Créer une configuration de colonne simplifiée
     column_config = {col: st.column_config.Column(label=col) for col in df.columns}
@@ -158,23 +155,25 @@ def display_table(table, page_num, table_idx, metadata=None, extraction_time=Non
         )
     except Exception as e:
         st.error(f"Erreur lors de l'affichage de l'éditeur de données: {str(e)}")
-        st.write("Affichage du DataFrame en lecture seule:")
+        st.write(f"Affichage du {data_type} en lecture seule:")
         st.dataframe(df)
         edited_df = df  # Utiliser le DataFrame original si l'édition échoue
 
     # Mettre à jour le DataFrame dans le session state si des modifications ont été apportées
     if not df.equals(edited_df):
-        update_session_state(table_key, edited_df, table, metadata, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        update_session_state(data_key, edited_df, data, metadata, datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                             data_type)
 
     # Bouton de téléchargement
     csv = edited_df.to_csv(index=False, encoding='utf-8-sig', sep=';').encode('utf-8-sig')
     st.download_button(
-        label=f"Télécharger le tableau {table_idx + 1} de la page {page_num}",
+        label=f"Télécharger le {data_type} {data_idx + 1} de la page {page_num}",
         data=csv,
-        file_name=f"page_{page_num}_tableau_{table_idx + 1}.csv",
+        file_name=f"page_{page_num}_{data_type}_{data_idx + 1}.csv",
         mime="text/csv",
         key=download_key
     )
+
 
 def display_page_and_results(page_num, pdf_document):
     st.markdown(f"### Page {page_num}")
@@ -193,34 +192,45 @@ def display_page_and_results(page_num, pdf_document):
 
     with col2:
         # Bouton d'extraction pour chaque page
-        if st.button(f"Extraire les tableaux de la page {page_num}", key=f"extract_{page_num}"):
-            with st.spinner(f'Extraction des tableaux de la page {page_num} en cours...'):
+        if st.button(f"Extraire les données de la page {page_num}", key=f"extract_{page_num}"):
+            with st.spinner(f'Extraction des données de la page {page_num} en cours...'):
                 extracted_data = extract_data_from_single_page(pdf_document, page_num, output_folder, model)
-                if extracted_data and extracted_data.get("tables"):
+                if extracted_data:
                     extraction_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     st.success(f'Extraction de la page {page_num} terminée !')
-                    for idx, table in enumerate(extracted_data["tables"]):
-                        update_session_state(f"page_{page_num}_table_{idx}", table, table, extracted_data["metadata"],
-                                             extraction_time)
-                else:
-                    st.warning(f"Aucun tableau trouvé sur la page {page_num}")
 
-        # Afficher les tableaux extraits pour cette page
-        page_key = f"page_{page_num}"
-        if page_key in st.session_state.extracted_tables:
-            for table_idx, table_data in st.session_state.extracted_tables[page_key].items():
-                if isinstance(table_data, dict) and 'df' in table_data:
-                    display_table(
-                        table_data['df'],
-                        page_num,
-                        table_idx,
-                        table_data.get('metadata'),
-                        table_data.get('extraction_time')
-                    )
+                    if extracted_data.get("tables"):
+                        for idx, table in enumerate(extracted_data["tables"]):
+                            update_session_state(f"page_{page_num}_table_{idx}", table, table,
+                                                 extracted_data["metadata"], extraction_time, "tables")
+
+                    if extracted_data.get("graphs"):
+                        for idx, graph in enumerate(extracted_data["graphs"]):
+                            update_session_state(f"page_{page_num}_graph_{idx}", graph, graph,
+                                                 extracted_data["metadata"], extraction_time, "graphs")
+
+                    if not extracted_data.get("tables") and not extracted_data.get("graphs"):
+                        st.warning(f"Aucune donnée trouvée sur la page {page_num}")
                 else:
-                    st.warning(f"Données non valides pour le tableau {table_idx + 1} de la page {page_num}")
+                    st.warning(f"Aucune donnée extraite de la page {page_num}")
+
+        # Afficher les données extraites pour cette page
+        page_key = f"page_{page_num}"
+        if page_key in st.session_state.extracted_data:
+            for data_type in ["tables", "graphs"]:
+                for data_idx, data in st.session_state.extracted_data[page_key][data_type].items():
+                    display_data(
+                        data['df'],
+                        page_num,
+                        data_idx,
+                        data.get('metadata'),
+                        data.get('extraction_time'),
+                        data_type[:-1]  # Enlever le 's' pour avoir "table" ou "graph"
+                    )
+
+
 # Upload du fichier PDF
-uploaded_file = st.file_uploader("Choisissez un fichier PDF", type="pdf")
+uploaded_file = st.file_uploader("Choisissez un fichier PDF", type="pdf", key="pdf_uploader")
 
 if uploaded_file is not None:
     # Créer un fichier temporaire pour stocker le PDF
@@ -254,8 +264,8 @@ if uploaded_file is not None:
     )
 
     # Bouton pour extraire toutes les pages sélectionnées
-    if st.button("Extraire les tableaux de toutes les pages sélectionnées"):
-        with st.spinner('Extraction des tableaux de toutes les pages sélectionnées en cours...'):
+    if st.button("Extraire les données de toutes les pages sélectionnées"):
+        with st.spinner('Extraction des données de toutes les pages sélectionnées en cours...'):
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 future_to_page = {
                     executor.submit(extract_data_from_single_page, st.session_state.pdf_document, page_num,
@@ -264,11 +274,16 @@ if uploaded_file is not None:
                     page_num = future_to_page[future]
                     try:
                         extracted_data = future.result()
-                        if extracted_data and extracted_data["tables"]:
+                        if extracted_data:
                             extraction_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                            for idx, table in enumerate(extracted_data["tables"]):
-                                update_session_state(f"page_{page_num}_table_{idx}", table, table,
-                                                     extracted_data["metadata"], extraction_time)
+                            if extracted_data.get("tables"):
+                                for idx, table in enumerate(extracted_data["tables"]):
+                                    update_session_state(f"page_{page_num}_table_{idx}", table, table,
+                                                         extracted_data["metadata"], extraction_time, "tables")
+                            if extracted_data.get("graphs"):
+                                for idx, graph in enumerate(extracted_data["graphs"]):
+                                    update_session_state(f"page_{page_num}_graph_{idx}", graph, graph,
+                                                         extracted_data["metadata"], extraction_time, "graphs")
                     except Exception as e:
                         st.error(f"Erreur lors de l'extraction de la page {page_num}: {str(e)}")
 
